@@ -1,4 +1,4 @@
-This project was an exploratory data analysis of particulate emissions data (called PM2.5) from the EPA. The data are available form [this link](https://d396qusza40orc.cloudfront.net/exdata%2Fdata%2FNEI_data.zip).
+This project was an exploratory data analysis of particulate emissions data (called PM2.5) from the EPA. The data are available from [this link](https://d396qusza40orc.cloudfront.net/exdata%2Fdata%2FNEI_data.zip).
 
 The goal of the analysis was to make plots that answer the following questions:
 
