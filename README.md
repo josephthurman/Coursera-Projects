@@ -8,3 +8,4 @@ The various projects are
 3.	Building simple machine learning models to predict the activity of a participant in a study from smartphone data similar to the above
 4.	An analysis of the economic costs and human casualties associated to storms from National Weather Service data
 5.	An interactive web application to visualize the density functions of various probability distributions
+6. An analysis of step data taken from a personal activity tracker

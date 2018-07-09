@@ -1,0 +1,229 @@
+---
+title: "The Impact of Storms on Economic Activity and Public Health"
+author: "Joseph Thurman"
+output: html_document
+---
+
+## Synopsis
+
+In this report, we analyze storm data from the National Weather service to determine which storm types have the greatest economic harm and human casualties. We begin by obtaining the raw data, then discuss how it can be subsetted and preprocessed to create an intermediate data set that contains damage and casualty figures for each storm. Using this, we find the average property damage, crop damage, fatality rate, and injury rate for each of the storm categories in the data (that have been recorded at least 50 times).
+
+In our analysis section, we find the event types that rank highest for average damage and casualties in each of these categories. We find that weather events with the potential to cause water damage (e.g., flooding and hurricanes) cause the most economic damage of any storm type, on average. For casualties, we find that heat-related weather events (e.g., heat waves) cause the highest casualties (deaths and injuries) on average. We end by discussing some shortcomings of our analysis and providing suggestions for improvements. 
+
+## Data Processing
+We begin our analysis by obtaining the data and loading it into R. First, we load the necessary packages
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+```{r, results= 'hide'}
+# Data Manipulation Libraries
+require(plyr)
+require(dplyr)
+
+# For plotting and arranging figures
+require(ggplot2)
+require(gridExtra)
+require(grid)
+
+# For printing tables
+require(xtable)
+```
+
+The data are obtained from the web address provided in the assignment. The first time this script is run, the data are downloaded to the working directory.  The time and date of the download are also recorded, for better reproducibility. When run again, the script first checks the working directory to see if the data are already present, and downloads the file only if it is found to be missing. 
+
+```{r}
+filename <- "repdata-data-StormData.csv.bz2"
+fileURL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+```
+
+```{r, cache=TRUE}
+if (!file.exists(filename)){
+    download.file(fileURL, filename)
+    access.time <- Sys.time()
+}
+```
+
+Note that the data we have obtained are stored in a `.csv` file compressed with the `bz2` method, which can still be read directly with the standard `read.csv` function. This is a relatively large amount of data, so we start by only reading the begining of the data set, to better understand its structure.
+
+```{r}
+initial.data <- read.csv(filename, nrows = 100)
+str(initial.data)
+```
+
+Following the prompt in the assignment, our analysis will investigate what types of events, indicated in the `EVTYPE` variable, have the greatest effect on public health and the economy. To this end, when we read the full data set into R for processing we will ignore columns that are not directly related to any of the relationships we study. Namely, we will only read the columns corresponding to event type, to economic damage caused by the storm, and to injuries and deaths caused by the storm. Then, reading from the list of variables in the data set we found above, we will keep the following variables:
+
+* Relating to the type of storm, we will retain the `EVTYPE` variable.
+* Relating to the economic damage caused by the storm, we will keep the `PROPDMG`, `PROPDMGEXP`, `CROPDMG`, and `CROPDMGEXP` variables.
+* Relating to injuries and deaths caused by the storm, we will keep the `FATALITIES` and `INJURIES` variables. 
+
+When we read in the data, we will only read in these columns to help shorten processing time and reduce memory usage. 
+```{r}
+keep.names <- c("EVTYPE", "PROPDMG", "PROPDMGEXP", 
+           "CROPDMG", "CROPDMGEXP", "FATALITIES", "INJURIES")
+should.keep <- names(initial.data) %in% keep.names
+colClass <- ifelse(should.keep, NA, "NULL")
+```
+
+```{r, cache= TRUE}
+storm.data <- read.csv(filename, colClasses = colClass)
+```
+
+With the releveant data read into memory, we process them for the future analysis, begining with the `PROPDMGEXP` and `CROPDMGEXP` columns. These columns give the exponent for the value in the related column without the "EXP" ending. For example, a row with "25" in the `PROPDMG` column and "K" in the `PROPDMGEXP` column represents a storm with a total of $25,000 of property damage. 
+
+We first inspect the levels of these variables. Dealing with the crop damage first, we have
+```{r}
+levels(storm.data$CROPDMGEXP)
+```
+Of these levels, we interpret "B" as "billion", "m" and "M" as "million", and "k" and "K" as thousand, so to ease future computation we will replace them with the appropriate integer for the exponent, e.g., "B" is replaced with "9". The values "2" and "0" are sensibly interpreted as exponents in this way, corresponding to damage in the hundreds and single digits, and so we leave them be. 
+
+Very few records with either "?" or "" in the `CROPDMGEXP` column have a non-zero value in `CROPDMG` column. Counting them,
+```{r}
+count <- length(subset(storm.data, (CROPDMGEXP == "?" | CROPDMGEXP == "") & CROPDMG != 0, 
+    select = CROPDMGEXP, drop = TRUE))
+```
+we see there are only `count = ` `r count` records with this value, so we feel it is safe to essentially discard those three records and set the value of `CROPDMGEXP` to 0 in those columns. 
+
+We modify the levels of `CROPDMGEXP` to make these changes, replacing the letters or other characters with the appropriate number for the exponent. 
+```{r}
+# plyr can't deal with the empty factor name - reassign it separately
+levels(storm.data$CROPDMGEXP)[levels(storm.data$CROPDMGEXP)== ""] <- "0"
+storm.data$CROPDMGEXP <- revalue(storm.data$CROPDMGEXP, 
+    c("?" = "0", "B" = "9", "k" = "3", "K" = "3", "m" = "6", "M" = "6"))
+```
+
+The same considerations apply to the `PROPDMGEXP` variable, which has levels
+```{r}
+levels(storm.data$PROPDMGEXP)
+```
+There are more levels, but we will treat them in much the same way. Again we will interpret "B" for billions, "k" and "K" for thousands, and "m" and "M"" for millions, and similarly we interpret "h" and "H" for hundreds. The levels "" and "?" are again associated with values of "0" in the `PROPDMG` column. Again, we can easily count them, 
+```{r}
+count2 <- length(subset(storm.data, (PROPDMGEXP == "?" | PROPDMGEXP == "") & PROPDMG != 0, 
+    select = PROPDMGEXP, drop = TRUE))
+```
+and we see there are only `count2 = ` `r count2` records with this value, a small number out of the nearly 90 thousand records in the data set, so we again set the value of the exponent to "0" in these cases. The remaining numerical levels can all be reasonably interpreted as exponents, so we leave them be.
+
+This leaves two levels, "-" and "+", that need to be interpreted numerically. Using a similar counting method as above, we see that the total number of record with these levels that also record property damage is
+```{r}
+count3 <- length(subset(storm.data, (PROPDMGEXP == "-" | PROPDMGEXP == "+") & PROPDMG != 0, 
+    select = PROPDMGEXP, drop = TRUE))
+```
+with `count3 = ` `r count3`. Again, given the small number of records we will essentially ignore their damage by setting the exponent to "0" in these cases.
+
+Having figured out all of the necessary modifications to the exponents, we reassign the levels of the `PROPDMG` column.
+```{r}
+levels(storm.data$PROPDMGEXP)[levels(storm.data$PROPDMGEXP)== ""] <- "0"
+storm.data$PROPDMGEXP <- revalue(storm.data$PROPDMGEXP, 
+    c("-" = "0", "?" = "0", "+" = "0", "B" = "9", "h" = "2", "H" = "2", "K" = "3", "m" = "6", "M" = "6"))
+```
+
+Finally, we can combine the damage columns with their exponents to produce new colums that give the damage as a number.
+```{r}
+storm.data$PROPDMG <- storm.data$PROPDMG * 10^(as.numeric(as.character(storm.data$PROPDMGEXP)))
+storm.data$CROPDMG <- storm.data$CROPDMG * 10^(as.numeric(as.character(storm.data$CROPDMGEXP)))
+storm.data <- select(storm.data, -PROPDMGEXP, -CROPDMGEXP)
+```
+
+We will also attempt to simplify the levels of the `EVTYPE` variable. This is more complicated, however, as there are many more levels to this variable, namely `length(levels(storm.data$EVTYPE)) = ` `r length(levels(storm.data$EVTYPE))` levels, and so it is not feasible to inspect each level individually. We observe that many of the levels in the `EVTYPE` variable occure very few times. We make a table that counts the number of times each level appears in our data set.
+```{r}
+counts <- as.data.frame(table(storm.data$EVTYPE))
+colnames(counts) <- c("level", "count")
+summary(counts$count)
+```
+We see from this summary that roughly 75% of the labels in the data frame are used to label less than 6 events. In light of this, we will discard any event that does not appear at least 50 times in the data set. This number, admittedly somewhat arbitrary, should be large enough to significantly cut down on the number of levels in the `EVTYPE` variable, while not being so large that rarer (but still possibly damaging) weather events are excluded.
+
+```{r}
+kept.labels <- filter(counts, count > 49) %>% select(level)
+sig.events <- filter(storm.data, EVTYPE %in% kept.labels$level)
+```
+We can see that this greatly simplified the `EVTYPE` variable: we now only have `length(kept.labels$level) = ` `r length(kept.labels$level)` different event types, although we have retained `round(nrow(sig.events)/nrow(storm.data)*100,2) = ` `r round(nrow(sig.events)/nrow(storm.data)*100,2)`% of the storm events.
+
+Finally, we group the data by the `EVTYPE` variable and summarize the variables by finding the average fatalities, injuries, and damage caused by each storm type. This summarization gives us another reason to restrict the `EVTYPE` variable only to events that have a significant number of events, so that the averages are more sensible due to a larger sample size. 
+
+```{r}
+averages <- group_by(sig.events, EVTYPE) %>%
+        summarise(CROPDMG = mean(CROPDMG), 
+                  PROPDMG = mean(PROPDMG), 
+                  FATALITIES = mean(FATALITIES), 
+                  INJURIES = mean(INJURIES))
+```
+
+
+
+## Results
+
+We now turn to the analysis, to attempt to identify which weather events cause the the most damage. We will consider economic damage, and then injuries and fatalities.
+
+### Economic Damage
+
+We begin by finding which event types, on average, have the highest crop damage and property damage. For each damage type, we rank the event types by the value of that type, take the top 5 values, and then produce a plot that shows the average damage done for each event in the top 5.
+
+For better reproducibility, we code the logic to extract the top 5 values as a function for repeated use, and also write a separate function that nicely graphs that data. 
+```{r}
+select.top <- function(data, column, n = 5) {
+    dvar <- paste0("desc(", column, ")")
+    top.ranked <- arrange_(data, dvar) %>%
+        select_("EVTYPE", value = column) %>%
+        slice(1:n)
+    top.ranked
+}
+
+create.graph <- function(data, title, ylab){
+    g <- ggplot(data, aes(EVTYPE, value)) + geom_col()
+    g <- g + scale_x_discrete(labels = c("HURRICANE/TYPHOON" = "HURRI/TYPH"))
+    g <- g + labs(x = "Event Type", y = ylab, title = title)
+    g
+}
+```
+
+Using these functions, we create the panel plot below, with each panel corresponding to the most damaging storm type for the two damage categories. 
+```{r, fig.height=8}
+p1 <- create.graph(select.top(averages,"CROPDMG"), title = "Crop Damage", ylab = "Damage")
+p2 <- create.graph(select.top(averages,"PROPDMG"), title = "Property Damage", ylab = "Damage")
+grid.arrange(p1, p2, nrow = 2, 
+            top = textGrob("5 Most Damaging Storm Types, by Category", 
+            gp = gpar(fontsize = 18)))
+```
+
+
+
+### Injuries and Fatalities
+
+We repeat the analysis as above, this time considering average injuries and fatalities instead of economic damage. Again, we produce a panel plot, with panels for fatalities and injuries. 
+
+```{r, fig.height=8}
+p3 <- create.graph(select.top(averages,"FATALITIES"), title = "Fatalities", ylab = "Deaths")
+p4 <- create.graph(select.top(averages,"INJURIES"), title = "Injuries", ylab = "Injuries")
+grid.arrange(p3, p4, nrow = 2, 
+            top = textGrob("5 Storm Types with Highest Casuality Rates, by Category", 
+            gp = gpar(fontsize = 18)))
+```
+
+
+### Discussion
+Our analysis above found the event types that cause the greatest damage and casualties, on average, finding the five event types that had the most effect in each category. We reported these results in two figures.
+
+The first figure, titled "5 Most Damaging Storm Types, by Category", shows that weather events that are likely to cause water damage - flooding, hurricanes - cause the most damage, on average. These events, in fact, account for all 5 of the event types that are most damaging to property ("Hurricane", "Hurricane/Typhoon", "River flood", "Storm Surge", and "Storm Surge/Tide"). Hurricanes, hurricanes and typhoons, and river floods also cause a great deal of crop damage. Unrelated to flooding, we see that droughts and freezes are also extremely damaging to crops. These events, though, do not cause as much non-crop property damage, which is unsurprising. 
+
+The second chart, titled "5 Storm Types with Highest Casuality Rates, by Category", shows that weather events related to high heat cause the most casualties, on average, causing both deaths and injuries. More specifically, "Excessive Heat", "Heat" and "Heat Wave" are among the top 5 most deadly and most injurious weather events. The three remaining event types that cause high casualities are not related. One, "Hurricane/Typhoon"", is one of the most damaging storm types found above. Rip currents have a high death rate, on average, but we suspect that this is somewhat of an anamoly - rip currents are likely only ever recorded when a swimmer has been caught in one, and so the number of deaths cause by rip currents is likely artificially high. Finally, ice is an event type that causes injury, but apparently is not generally deadly. 
+
+Together, these charts suggest that flooding, especially hurricane related-flooding, causes the highest average economic damage of any of the weather events we consider. On the other hand, heat waves have the highest human cost, in terms of average casualties.
+
+### Suggestions for Future Analysis
+
+Although our analysis has produced some useful results, there are a number of ways it could be improved. We discuss some of the shortcoming of our analysis, and how they might be fixed, in detail below. This discussion demonstrates one of the benefits of reproducible research.  Because our analysis is written in a reproducible way, with the code, reasoning, and original data all together, other researchers could use our code as a starting point for more sophisticated analyses that take into account the following points. In particular, our goal in this project is to produce only broad, quanititative conclusions, since we do not yet have the statistical tools to produce more quantitiative models. This code could provide a starting point for a more statistically saavy researcher to perform a more rigorous analysis. 
+
+For that future researcher, we suggest the following ways the analysis could be improved:
+
+1. Take more care with the `EVTYPE` variable. The main problem with this variable is that there are a number of event categories that are obviously either incorrect (likely a result of typographical or data entry errors) or redundant. The latter problem is evident in our final results. For example, "Hurricane" and "Hurricane/Typhoon" both appear as storms that are extremely damaging, on average, but could likely be combined into one event type, as could "Excessive Heat", "Heat" and "Heat Wave". 
+
+    There are two main ways that we could deal with this difficulty. First, we could examine each possible label individually and make changes in a way similar to the way we relabeled the `CROPEXP` and `PROPEXP` variables, but this is quite intensive with nearly 1000 labels, (and still a fair amount of work even if one only considers  the `r length(kept.labels$level)` different labels that appear at least 50 times). Alternatively, one could consider clustering algorithms or other language processing tools that could perhaps automatically combine similar categories. Both of these methods seem beyond the scope of the assignment, so we do not include them here, and simply work with the `EVTYPE` labels as given.
+
+2. Try harder to fix incorrect or missing values in the `CROPDMGEXP` and `PROPDMGEXP` columns. Certainly an entry of "?" or "-" represent an error in data entry for these columns, but instead of trying to correct these mistakes our method is to essentially ignore the related damage for that record.
+
+3. Consider more of the variables in the original data set. For example, we have discarded information about the magnitude of the various weather events, although in theory one could create a statistical model that could predict fatalities or damage from the magnitude. Similarly, we discarded location data, but it is highly likely that the most deadly and damaging types of weather events vary across states (few hurricanes are likely to hit Montana), and it could be interesting to see how these differences change across location. These analyses would require statistical tools that we haven't learned yet, though, so we don't attempt them. 
+
+4. Account for inflation. We are completely ignoring inflation and this means that weather events in the past will have comparatively low damage in dollar terms, even if they produced identical physical damage. Properly dealing with inflation, though, is somewhat complicated and seems to be outside the scope of this course and assignment.
+
+
