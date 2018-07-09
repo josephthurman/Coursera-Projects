@@ -1,0 +1,188 @@
+---
+title: "Daily Activity Analysis"
+author: "Joseph Thurman"
+output: html_document
+---
+## Loading and preprocessing the data
+
+We begin by loading the necessary packages for our analyis:
+```{r}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+```
+
+Following the assignment instructions, we can assume that the data for the assignment are present as a file called `activity.csv` located in the current working directory, as this analysis file and the data are all available in the same GitHub repository. We begin by reading the data into R and inspecting the resulting data frame.
+
+```{r}
+activity <- read.csv("activity.csv")
+str(activity)
+```
+
+We observe that the resulting data frame has 3 columns and 17568 rows. The three columns are `steps`, `date`, and `interval`, of types integer, factor, and integer, respectively. Each row represents the number of steps taken, in the `steps` column, during the 5 minute interval given by the `interval` column on the given `date`. 
+
+For now, we leave the `date` column as a factor variable, so that we can use the  `group_by` function from the `dplyr` package to group the data by date. (This function cannot group using date variables, but can group using factor variables.) Later in our analysis it will be necessary to parse these dates.
+
+The `interval` column, however, does require some processing and interpretation. In its current state, it is an integer that represents the 24-hr clock time, with leading zeros removed, at the start of the 5-minute interval under consideration. For example, the entry `40` represents the time `00:40`, or 12:40 am, while the entry `1920` represents the time `19:20`, or 7:20 pm. (More properly, `1920` represents the 5-minute time interval from 7:20 pm to 7:25 pm.)
+
+We parse these integers into a new variable, `hours.after.midnight`, for easier graphing.
+```{r}
+activity$hours.after.midnight <- activity$interval %/% 100 + (activity$interval %% 100)/60
+```
+
+## What is mean total number of steps taken per day?
+
+We begin by summarizing the data frame, grouping by date and summing the `steps` column to find the total number of steps taken each day. We ignore the `intervals` and `hours.after.midnight` columns for this section, and following the instructions in the assignment we ignore missing values when taking the sum.
+
+```{r}
+daily.totals <- activity %>%
+    select(date, steps) %>%
+    group_by(date) %>%
+    summarise(total = sum(steps, na.rm = TRUE))
+```
+
+We summarize these daily totals by finding their mean, median, and making a histogram of the daily totals. 
+
+```{r}
+cat(paste(c("Mean: ", mean(daily.totals$total, na.rm = TRUE), "\n", 
+            "Median: ", median(daily.totals$total, na.rm = TRUE)), collapse = ""))
+```
+
+```{r}
+qplot(daily.totals$total, main = "Distribution of Daily Totals", xlab = "Daily Total Steps", ylab = "Frequency", bins = 15)
+```
+
+We see that the average number of steps taken per day is roughly 10,000 steps. The histogram also seems to show that there are 10 days that record either 0 steps or very little activity. We will see later in the analysis that many of these days are actually missing measurements.
+
+## What is the average daily activity pattern?
+
+To investigate the average daily activity pattern, we instead group the data by interval and take the average of the number of steps made during each interval across all dates. We use both the `hours.after.midnight` column and the `interval` column group, even though they contain essentially the same information, to facilitate later caluculations. 
+
+```{r}
+interval.averages <- activity %>%
+    select(-date) %>%
+    group_by(hours.after.midnight, interval) %>%
+    summarise(steps = mean(steps, na.rm = TRUE)) %>%
+    ungroup()
+```
+
+We then plot this data as a line graph to represent the average step activity over a 24-hour period.
+
+```{r}
+qplot(interval.averages$hours.after.midnight, interval.averages$steps, 
+      geom = "line", 
+      main = "Average Daily Activity", 
+      xlab = "Time (24 hr clock)", 
+      ylab = "Steps")
+```
+
+From the figure, we see that peak activity tends to occur roughly between 8 and 9 am, with an average of 200 steps taken in that time interval. Finding that interval precisely, we have
+
+```{r}
+filter(interval.averages, steps == max(steps, na.rm = TRUE))
+```
+
+That is, the greatest activity, on average, occurs in the interval from 8:35 - 8:40 am, when an average of roughly 206 steps are taken. 
+
+## Imputing missing values
+
+There are a number of missing values in the data. We first count the number of rows that contain any missing values.
+
+Recall that the first three columns of the `activity` data frame, namely `steps`, `date`, and `interval`, were the ones present in the original data frame. We first notice that there are no missing data in the `date` or `interval` columns.
+```{r}
+sum(is.na(activity$date))
+sum(is.na(activity$interval))
+```
+
+Thus the number rows in the data set that contain missing information will simply be the number of entries in the `steps` column that have missing values. This number is
+```{r}
+sum(is.na(activity$steps))
+```
+
+We impute data for these missing values by replacing every missing value in the `steps` column with the average number of steps taken in that interval across the entire data set. For example, copying some values we found already, any date that is missing a `steps` observation for the time interval from 8:35 - 8:40 am (the interval of maximum average activity we found earlier) will have that missing value replaced with 206.1698. 
+
+```{r}
+activity.imputed <- left_join(activity, 
+                              select(interval.averages, interval, steps), 
+                              by = "interval",
+                              suffix = c(".x", ".imputed"))
+steps.is.missing <- is.na(activity.imputed$steps.x)
+activity.imputed$steps.x[steps.is.missing] <- activity.imputed$steps.imputed[steps.is.missing]
+activity.imputed <- activity.imputed %>%
+    select(-steps.imputed) %>%
+    rename(steps = steps.x)
+```
+
+We see that there are no missing values in this new data set
+```{r}
+sum(is.na(activity.imputed$steps))
+```
+
+We now examine how imputing these missing values affects the summaries we have already computed. We redo the first part of our analysis, finding the mean and median of the total number of steps taken per day, and making a histogram of this data, using the imputed data.
+
+```{r}
+#Summarize
+daily.totals.imputed <- activity.imputed %>%
+    select(date, steps) %>%
+    group_by(date) %>%
+    summarise(total = sum(steps))
+
+#Report Mean and Median
+cat(paste(c("Mean: ", mean(daily.totals.imputed$total), "\n", 
+            "Median: ", median(daily.totals.imputed$total)), collapse = ""))
+```
+
+We see that the median and mean for this imputed data are the same. We observe, though, that this number is the total number of steps taken, on average, in a day, that is, is the sume of the all of the average steps taken in each interval.
+```{r}
+sum(interval.averages$steps)
+```
+Since there was a number of missing days, and each missing day is replaced with the average activity, the mean of the resulting data will be the same as the mean of the number of steps for the days with non-missing activity. The replacements for the missing data are also in the middle of the data set, so it is not surprising that the median of the imputed data will be the same as the mean. 
+
+We can also remake our earlier historgram with the imputed data. 
+
+```{r}
+qplot(daily.totals.imputed$total, main = "Distribution of Daily Totals, with imputed data", xlab = "Daily Total Steps", ylab = "Frequency", bins = 15)
+```
+
+From the new mean, median, and histogram, we see that imputing values for the missing days has had a moderate effect on the summary data. The original data had multiple days with no data recorded, and when finding the daily step total of such a day using the `sum` function with `na.rm = TRUE`, we end up assigning that day a total of zero steps. This had the effect of skewing the data to the left, which we can observe in the lower mean and median we found in our initial data, along with the peak at the left of the original histogram. Our imputed data removes this skew, so we see that the mean and median of the imputed data are higher, and the distribution of the histogram has become more symmetrical.  In particular, it now appears that there are only two days where the sensor measured no, or very little, activity, and a comparison with the original histogram shows that there were apparently 8 days where no data were recorded. 
+
+## Are there differences in activity patterns between weekdays and weekends?
+
+We now investigate to see if there are differences in step activity between weekdays and weekends. Following the instructions, we use the data with the missing values imputed for this section. We begin by by adding a new factor variable, `day.type`, to the data. It will have two levels, 'weekend' and 'weekday', to classify whether the date occurs on a weekend (Saturday or Sunday) or a weekday. 
+
+We start by writing a helper function that takes in a date and returns 'weekend' or 'weekday' depending on the date.
+```{r}
+day_type <- function(date){
+    # Takes a date, given as a character string, and returns are character string classifying the date as a 'weekend' or 'weekday'.
+    if (weekdays(strptime(date, "%Y-%m-%d")) %in% c("Saturday", "Sunday")) {
+        return("weekend")
+    } else {
+        return("weekday")
+    }
+}
+```
+
+Using that helper function, we create the new column.
+```{r}
+activity.imputed$day.type <- factor(sapply(as.character(activity.imputed$date), day_type))
+```
+
+We now find the average number of steps during each weekday time interval and each weekend time interval.
+```{r}
+weekend.comparison <- activity.imputed %>%
+    select(steps, interval, hours.after.midnight, day.type) %>%
+    group_by(interval, hours.after.midnight, day.type) %>%
+    summarise(steps = mean(steps, na.rm = TRUE)) %>%
+    ungroup()
+```
+
+Finally, we plot the average activity by interval, separating the data for weekdays and weekends.
+
+```{r}
+q <- qplot(hours.after.midnight, steps, data = weekend.comparison, geom = "line") + facet_grid( day.type ~.)
+q <- q + labs(x = "Time (24 hr clock)", y = "Steps", title = "Average Activity, Weekday vs. Weekend")
+q
+```
+
+There does appear to be some difference in activity levels comparing weekends vs. weekdays. Nontrivial activity levels on weekdays appear to begin around 6 am, earlier than the roughly 8 am observed for weekends. The peak activity level on weekends in lower, but the overall activity level appears somewhat higher. One possible explanation could be that there is no "morning rush" on the weekends to prepare for and travel to work, but that one is more likely to engage in active hobbies in the afternoon on a weekend.
+
+It is difficult, however, to draw any conclusions from this comparison. The main problem is that there are more weekday days then weekend days, so the overall average activity is skewed to look like the average weekday activity. Indeed, we can observe that the activity chart for the weekdays in the above graph is very similar to the average activity chart found earlier. This means that the average data we use to fill in missing data is more similar to the activity data for a weekday than a weekend. Thus if any weekend days are missing from the original data set, it will be filled with data that resembles a weekday, and decreasing the effect of weekend vs weekday differences in the graph above. In a future analysis a different method of imputing missing values may be necessary that takes into account the possible difference between weekends and weekdays. 
