@@ -1,0 +1,193 @@
+---
+title: "Exercise Classification with Machine Learning"
+author: "Joseph Thurman"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Introduction
+
+In this project, we use machine learning methods to build prediction models based on the "Weight Lifting Exercises" data set available [here](http://groupware.les.inf.puc-rio.br/har). This data set consists of measurements taken by accelerometers placed on study participants as they performed an exercise. In some trials, the participants performed the exercises correctly, while in other trials they made different errors in form. The goal of this analysis is to be able to predict the form with which the exercise is performed from the accelerometer data. 
+
+Using boosted trees and random forests, we build two prediction models for this data. We tune these models using cross validation, then use a validation set to estimate that the random forest model will have the lowest out-of-sample error. Finally, we test this random forest prediction model on a provided test data set, where we find it has 100% accuracy. 
+
+## Data Acquisition and Processing
+
+First, we set up the environment by loading all of the packages we will use in our analysis. We load the `caret` package for machine learning, and other packages that will allow for parallel computation, improving performance. We also load some standard data handling libraries.
+```{r}
+library(caret)
+library(parallel)
+library(doParallel)
+library(plyr)
+library(dplyr)
+```
+
+We then begin our analysis in earnest by obtaining the data sets. We check if the data have already been downloaded by searching for the file in the current working directory (the directory where this markdown file is located). If the files are not present, they are downloaded from the URLs provided in the assignment online. Once the files are in the working directory, we read and load the data sets. Note that the data have already been divided into a training set, which includes a variable that describes the exercise method, and a test set that does not. The predictions we make from the test set will be evaluated using the quiz associated to the assignment. 
+
+```{r, cache=TRUE}
+trainingFileName <- "pml-training.csv"
+testingFileName <- "pml-testing.csv"
+trainingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if (!file.exists(trainingFileName)){
+    download.file(trainingURL, trainingFileName)
+}
+if (!file.exists(testingFileName)){
+    download.file(testingURL, testingFileName)
+}
+
+data <- read.csv(trainingFileName, na.strings = c("NA", "#DIV/0!"))
+test <- read.csv(testingFileName, na.strings = c("NA", "#DIV/0!"))
+```
+
+First, we can inspect the training data by hand (perhaps using a `str` command) to see that there are a number of variables that have a high number of missing values, for example, more than 19000 missing values when there are 19622 observations in the data set. We remove these variables, since they will have no predictive value. 
+
+```{r}
+na_count <- sapply(data, function(y) { sum(is.na(y))})
+keep_vars <- names(na_count[na_count < 100])
+data.clean <- data[,keep_vars]
+```
+
+Finally, we see that a few of the remaining variables (timestamp, subject name, etc.) are irrelevant to the actual recorded motion, and will therefore not be useful to classify exercises based on movement in the future. By inspection, these are the first 7 variables in the data set.
+
+```{r, cache = TRUE}
+data.clean <- data.clean[,8:length(colnames(data.clean))]
+```
+
+We now have a clean data set on which we can train our model. Note that there are now `r length(names(data.clean))` variables - `r length(names(data.clean)) - 1` predictors, and the response variable `classe`. Our goal will be to predit the value of the `classe` variable, which categorizes the method by which the exericse was done (either as correct or with 4 different types of incorrect form) based on the values of the other variables. For more information about the different variables and their types, see the documentation files linked in the introduction. 
+
+In order to be able to test the models we build and estimate the out-of-sample error rate, we will hold back a portion of this data (20%) as a validation data set. We will train our models on the remaining data.
+```{r}
+set.seed(1)
+trainingPartition <- createDataPartition(data.clean$classe, p = 0.8, list = FALSE)
+training.clean <- data.clean[trainingPartition,]
+validation.clean <- data.clean[-trainingPartition,]
+```
+We end by cleaning the testing data set using so that it has the same set of predictor variables as above. This data set does not have the `classe` variable, and instead has a final variable called `problem_id` to be used in the quiz portion of this assignment. 
+
+```{r}
+test.keep <- names(training.clean)[names(training.clean) != "classe"]
+test.keep <- c(test.keep, "problem_id")
+test.clean <- test[,test.keep]
+```
+
+## Model Training
+We now fit two models different models to the training data, using different machine learning algorithms. In each case, we will use cross validation to tune the parameters of the model, so we set a common training comtrol that we will use for both models. We use 3-fold cross validation, since the large size of the data set makes more folds and more repeats less feasbile for computation. We also allow parallel computation to improve performance.
+```{r}
+tc <- trainControl(method = "cv", number = 3, allowParallel = TRUE)
+```
+
+We now train the first model. We use gradient-boosted trees, the `gbm` method in `R`. We also use parallel processing to allow for faster computation.
+```{r, cache = TRUE}
+#Start parallel processing
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Actual model trainig, with timing
+start <- Sys.time()
+set.seed(12)
+gbmModel <- train(classe ~ ., data = training.clean, trControl = tc, method = "gbm", verbose = FALSE)
+end <- Sys.time()
+gbmTime <- end - start
+
+#End parallel processing
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+Training this model took a total of `r gbmTime` minutes. 
+
+The second model will use random forets, the `rf` method. 
+```{r, cache = TRUE}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+start <- Sys.time()
+set.seed(123)
+rfModel <- train(classe ~ ., data = training.clean, trControl = tc, method = "rf")
+end <- Sys.time()
+rfTime <- end - start
+
+stopCluster(cluster)
+registerDoSEQ()
+```
+Training this model took a total of `r rfTime` minutes.
+
+## Analysis of the Models
+
+With these two models trained, we now compare and analyze them to decide which model we will use for our final predictions on the test set, as well as interpreting some of the results of the models.
+
+### Gradient-Boosted Trees
+
+To analyze the boosted tree model, we begin by simply examining the summary of the model.
+```{r}
+gbmModel
+```
+We see from these results that the `caret` package trained the model by adjusting the interaction depth and number of trees it used as parameters for the model. It tested each choice of these parameters using 3-fold cross validation. We see above that the set of model parameters with the highest accuracy in cross-validation were `n.trees = ` `r gbmModel$results$n.trees[which.max(gbmModel$results$Accuracy)]` and `interaction.depth = ` `r gbmModel$results$interaction.depth[which.max(gbmModel$results$Accuracy)]`. Models built with these parameters during cross-validation had an average accuracy of `r round(max(gbmModel$results$Accuracy)*100,digits = 2)`%. This average is essentially the average of the "out-of-sample" error rate of each of the three models built on during cross validation using these parameters, and as such we expect this number to be an estimate of the out-of-sample error rate of the final model we obtain.
+
+The final model is then obtained by training the model, using the parameters found during cross-validation, on the entire data set. We can check the accuracy of this final model, first by simply checking its accuracy on the training data. We compare the accuracy of the prediction of the model vs. the actual value. 
+```{r}
+gbm.training.accuracy <- mean(predict(gbmModel, training.clean) == training.clean$classe)
+```
+We see that, on the training data, this model performs reasonably well, with an accuracy of `r round(gbm.training.accuracy*100, digits = 2)`%. Of course, this accuracy could be due to overfitting, so the best way to evaluate the model is to find the accuracy of the model when it predicts using data not included in the training set. We therefore test the predictions of our model on the validation set we held out at the begining of our analysis. 
+```{r, warning=FALSE, message= FALSE}
+gbmValidationCM <- confusionMatrix(predict(gbmModel, validation.clean), validation.clean$classe)
+gbmValidationCM$table
+```
+The table produced by the confusion matrix shows that our prediction model is fairly accurate. The accuracy of the model on this validation set is `gbmValidationCM$overall[1] = ` `r round(gbmValidationCM$overall[1]*100, digits = 2)`%. This is the best estimate of the out-of-sample error rate for this model. Note that this value is close to the earlier value of `r round(max(gbmModel$results$Accuracy)*100,digits = 2)`% that was estimated using cross-validation, and lower than the accuracy of the model on the training set, as expected.
+
+
+### Random Forests
+We now subject the random forest model to the same analysis.
+```{r}
+rfModel
+```
+This time, the `caret` packaged trained the model by tuning the `mtry` variable. With each prospective value of this variable, we test a model built with this parameter using 3-fold cross validation. In these tests, the value `mtry = ` `r rfModel$results$mtry[which.max(rfModel$results$Accuracy)]` had the highest average accuracy of roughly `r round(max(rfModel$results$Accuracy)*100, digits = 2)`% percent. Again, this is an estimate of the out-of-sample error rate for the final model we will train.
+
+After cross-validation, a random forest model is trained, using the above value of the `mtry` variable, on the entire training set. First, we find the accuracy of this final model on the entire training set.
+```{r}
+rf.training.accuracy <- mean(predict(rfModel, training.clean) == training.clean$classe)
+```
+The accuracy computed above is `r rf.training.accuracy*100`%. Of course, we should not expect the model to have this accuracy on new data on which it was not trained. As before, we must test our model on the validation set.
+```{r}
+rfValidationCM <- confusionMatrix(predict(rfModel, validation.clean), validation.clean$classe)
+rfValidationCM$table
+```
+The accuracy of the model on this validation set is `rfValidationCM$overall[1] = ` `r round(rfValidationCM$overall[1]*100, digits = 2)`%. This is the best estimate of the out-of-sample error rate for this model, and again we note that this error is close to the out-of-sample error estimated in cross-validation, while still being lower than the accuracy of the training data.
+
+
+## Model Selection and Prediction
+In the above section, we analyzed our two models, built using boosted trees and random forests. In particular, we estimated the expected out-of-sample error rate of each model by testing the predictions of each model on a validation set that was not used to build the models. The estimates were `r round(gbmValidationCM$overall[1]*100, digits = 2)`% for the boosted tree model and `r round(rfValidationCM$overall[1]*100, digits = 2)`% for the random forest model, so we select the random forest model as our final prediction model, since we expect it to have the lowest error rate on new samples. 
+
+Using this random forest model, we can predict values for the `classe` variable on the 20 data points in the test data set. We find the predictions are:
+```{r}
+predict(rfModel, select(test.clean, -problem_id))
+```
+When checked using the quiz for this assignment, these predictions were all correct, giving an accuracy rate of 100% on the test set. 
+
+We note that the predictions for the other model are actually the same:
+```{r}
+predict(gbmModel, select(test.clean, -problem_id))
+```
+So both models have the same performance on the test set.
+
+Although we can use our model as a black box to make predictions without understanding its inner workings, it is edifying to see what features in the data set the model is using to make its classification predictions. One way to see this is to plot the importance of the different variables to the prediction model. We first consider this plot for our final model.
+
+```{r, fig.height=7}
+plot(varImp(rfModel))
+```
+
+We can also find the importance of the different features in the boosted tree model.
+
+```{r, fig.height=7}
+plot(varImp(gbmModel))
+```
+
+We note that, at least at the high end of variable importance, the two models are somewhat similar in the variables they use to make predictions. This could provide an interesting guide for further study and predictions.
+
+
+
